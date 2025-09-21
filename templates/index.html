@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>PR Review Agent</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --bg:#0b1220; --bg-soft:#111932; --ink:#eaeefb; --muted:#9fb0d9; --accent:#6ea8fe; --err:#ff6b6b;
+      --card-bg:#0f1730; --border:#1e2b50; --ok:#52d273;
+    }
+    *{box-sizing:border-box}
+    body{
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      margin:0; background:var(--bg); color:var(--ink);
+    }
+    .wrap{max-width:1080px; margin:32px auto; padding:0 16px;}
+    .header{display:flex; align-items:center; gap:12px; margin-bottom:18px}
+    .badge{padding:4px 10px; border:1px solid var(--border); border-radius:999px; color:var(--muted); font-size:12px}
+    .card{
+      background:var(--card-bg); border:1px solid var(--border);
+      border-radius:14px; padding:18px; box-shadow:0 10px 30px rgba(0,0,0,.25);
+    }
+    label{display:block; font-weight:600; margin:10px 0 6px;}
+    input, select{
+      width:100%; background:#0c1530; color:var(--ink); border:1px solid var(--border);
+      border-radius:10px; padding:10px 12px; outline:none;
+    }
+    input::placeholder{color:#6b7eb6}
+    .row{display:grid; grid-template-columns:1fr 180px; gap:12px}
+    .btn{
+      appearance:none; border:none; border-radius:10px; padding:12px 14px; font-weight:700; cursor:pointer;
+      background:linear-gradient(180deg, #6ea8fe, #4d7dff); color:#06112c; transition:transform .05s ease;
+    }
+    .btn:active{transform:translateY(1px)}
+    .btn.secondary{background:#172245; color:var(--ink); border:1px solid var(--border)}
+    .btn.ghost{background:transparent; color:var(--muted); border:1px dashed var(--border)}
+    .grid{display:grid; gap:16px}
+    .hint{color:var(--muted); font-size:14px}
+    .err{color:var(--err); margin-top:10px; white-space:pre-wrap}
+    .ok{color:var(--ok)}
+    .samples{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px}
+    .samples button{font-size:12px; padding:8px 10px}
+    .split{display:grid; grid-template-columns:1fr; gap:16px; margin-top:18px}
+    @media(min-width:980px){ .split{grid-template-columns: 420px 1fr;} }
+    .output{
+      min-height:380px; white-space:pre-wrap; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background:#091026; border:1px solid var(--border); border-radius:12px; padding:14px; overflow:auto;
+    }
+    .toolbar{display:flex; align-items:center; gap:8px; justify-content:flex-end; margin-bottom:8px}
+    .spinner{display:none; width:16px; height:16px; border:3px solid #7fa7ff33; border-top-color:#7fa7ff; border-radius:50%; animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .note{font-size:12px; color:var(--muted); margin-top:8px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h1 style="margin:0;">Pull Request Review Agent</h1>
+      <span class="badge">Python · Lint + Heuristics · Score</span>
+    </div>
+
+    <div class="split">
+      <!-- Left: form -->
+      <div class="card">
+        <form id="prForm" method="POST" class="grid" onsubmit="startLoading()">
+          <div>
+            <label>Provider</label>
+            <select name="provider" id="provider">
+              <option value="github">GitHub</option>
+              <option value="gitlab">GitLab</option>
+              <option value="bitbucket">Bitbucket</option>
+            </select>
+          </div>
+
+          <div>
+            <label>Repository</label>
+            <input name="repo" id="repo" placeholder="owner/name OR group%2Fproject" required />
+            <div class="hint">Examples: <code>octocat/Hello-World</code> · <code>pallets/flask</code></div>
+          </div>
+
+          <div class="row">
+            <div>
+              <label>PR/MR number</label>
+              <input name="pr" id="pr" placeholder="e.g. 1" required />
+            </div>
+            <div style="align-self:end;">
+              <button class="btn" type="submit">
+                <span id="btnText">Analyze PR</span>
+                <span class="spinner" id="spinner" aria-hidden="true"></span>
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <div class="hint">
+              Tip: For GitHub public repos you can test without a token. For private repos, set an env var in the shell:
+              <code>$env:GITHUB_TOKEN="ghp_..."</code>
+            </div>
+            <div class="samples">
+              <span class="hint">Quick samples:</span>
+              <button class="btn secondary" type="button" onclick="fill('github','octocat/Hello-World','1')">octocat/Hello-World · #1</button>
+              <button class="btn secondary" type="button" onclick="fill('github','pallets/flask','5818')">pallets/flask · #5818</button>
+              <button class="btn ghost" type="button" onclick="clearForm()">Clear</button>
+            </div>
+          </div>
+
+          {% if error %}<div class="err">{{ error }}</div>{% endif %}
+        </form>
+      </div>
+
+      <!-- Right: output -->
+      <div class="card">
+        <div class="toolbar">
+          <button class="btn secondary" type="button" onclick="copyOut()">Copy</button>
+        </div>
+        <div id="output" class="output">{{ feedback | e }}</div>
+        <div class="note">Report shows heuristic findings and summaries from flake8 · pylint · bandit, plus a score.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Fill sample values quickly
+    function fill(provider, repo, pr){
+      document.getElementById('provider').value = provider;
+      document.getElementById('repo').value = repo;
+      document.getElementById('pr').value = pr;
+    }
+    function clearForm(){
+      document.getElementById('repo').value = '';
+      document.getElementById('pr').value = '';
+      document.getElementById('repo').focus();
+    }
+    // Copy output
+    function copyOut(){
+      const el = document.getElementById('output');
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      sel.removeAllRanges(); sel.addRange(range);
+      try { document.execCommand('copy'); } catch(e){}
+      sel.removeAllRanges();
+    }
+    // Spinner/disable on submit
+    function startLoading(){
+      document.getElementById('spinner').style.display = 'inline-block';
+      document.getElementById('btnText').textContent = 'Analyzing...';
+      // Let the form submit normally; prevent double clicks
+      setTimeout(() => {
+        document.querySelectorAll('button[type="submit"]').forEach(b => b.disabled = true);
+      }, 0);
+    }
+  </script>
+</body>
+</html>
